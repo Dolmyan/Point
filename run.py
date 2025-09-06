@@ -79,6 +79,7 @@ async def on_startup():
 @app.post("/yookassa/webhook")
 async def yookassa_webhook(request: Request):
     data = await request.json()
+    logging.info(f"Webhook received: {data}")  # <-- добавлено
     event = data.get("event")
     obj = data.get("object", {})
 
