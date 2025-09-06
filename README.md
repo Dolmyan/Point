@@ -1,4 +1,4 @@
-[Читать русскую версию → README_ru.md] (README_ru.md)
+[Читать русскую версию → README_ru.md](README_ru.md)
 
 # 🚀 Point — Content Bot for Creators
 
