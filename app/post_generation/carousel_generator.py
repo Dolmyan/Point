@@ -1,9 +1,14 @@
+import concurrent.futures
 import logging
 import os
 import uuid
 from openai import OpenAI
 from PIL import Image, ImageDraw, ImageFont
 from typing import List, Tuple
+
+import multiprocessing
+import io
+import gc
 
 from config import AI_TOKEN
 from database import BotDB
@@ -17,6 +22,54 @@ client = OpenAI(
         api_key=AI_TOKEN  # вставь свой ключ
 )
 
+# ---------- Настройки оптимизации ----------
+# Включить "лёгкий режим" (уменьшает размеры шаблонов)
+# По умолчанию включён; для отключения установите env POINT_LIGHTWEIGHT=0
+LIGHTWEIGHT_MODE = os.environ.get("POINT_LIGHTWEIGHT", "1") != "0"
+# Целевой размер (вертикальный ориентир). Длинная сторона не будет превышать max(LIGHTWEIGHT_TARGET).
+LIGHTWEIGHT_TARGET = (1080, 1350)
+LIGHTWEIGHT_MAX_SIDE = max(LIGHTWEIGHT_TARGET)
+
+# Максимальное число процессов для multiprocessing (min 1)
+MAX_WORKERS = max(1, min(4, (os.cpu_count() or 1)))
+
+# Кеш шрифтов (font_path, size) -> ImageFont
+FONT_CACHE = {}
+
+def get_font(path: str, size: int) -> ImageFont.FreeTypeFont:
+    key = (path, int(size))
+    f = FONT_CACHE.get(key)
+    if f is None:
+        f = ImageFont.truetype(path, int(size))
+        FONT_CACHE[key] = f
+    return f
+
+
+def scale_config_for_lightweight(config: dict) -> dict:
+    """Сжимает конфиг пропорционально, чтобы ни одна сторона не превышала LIGHTWEIGHT_MAX_SIDE.
+    Сохраняет ориентацию (вертикальную/горизонтальную)."""
+    if not LIGHTWEIGHT_MODE:
+        return config
+    w, h = config.get("size", (0, 0))
+    long_side = max(w, h)
+    if long_side <= LIGHTWEIGHT_MAX_SIDE:
+        return config
+    s = LIGHTWEIGHT_MAX_SIDE / float(long_side)
+    new = dict(config)
+    new["size"] = (max(1, int(round(w * s))), max(1, int(round(h * s))))
+    # Масштабируем числовые параметры кроме коэффициентов (title_line/body_line)
+    for key in ("padding_x", "top_y", "bottom_y", "title_size", "body_size",
+                "title_body_gap", "sig_size"):
+        if key in config and isinstance(config[key], (int, float)):
+            new[key] = max(1, int(round(config[key] * s)))
+    # tracking_px — маленькое значение, не масштабируем сильно, но округлим
+    if "tracking_px" in config:
+        new["tracking_px"] = int(round(config["tracking_px"]))
+    # sig_offset — tuple
+    if "sig_offset" in config and isinstance(config["sig_offset"], (list, tuple)):
+        new["sig_offset"] = (int(round(config["sig_offset"][0] * s)),
+                             int(round(config["sig_offset"][1] * s)))
+    return new
 
 # --- Текстовые слайды ---
 def generate_carousel_text(prompt: str, style):
@@ -73,7 +126,6 @@ POINT_TEMPLATES_DIR = os.path.join(BASE_DIR, "point_templates")
 
 INTER_REGULAR = os.path.join(BASE_DIR, "Inter-Regular.otf")
 INTER_BOLDITALIC = os.path.join(BASE_DIR, "Inter-BoldItalic.otf")
-
 INTER_LIGHT = os.path.join(BASE_DIR, "Inter-Light.otf")
 
 if not os.path.exists(INTER_REGULAR) or not os.path.exists(INTER_LIGHT):
@@ -605,8 +657,9 @@ def make_image_from_bg(slide_text: str, bg_path: str, config: dict, sig: str = "
     cur_title_size = title_font.size
     cur_body_size = body_font.size
 
-    t_font = ImageFont.truetype(INTER_REGULAR, cur_title_size)
-    b_font = ImageFont.truetype(INTER_LIGHT, cur_body_size)
+    # переиспользуем get_font, но для изменения размера требуется новый объект — поэтому будем запрашивать вновь
+    t_font = get_font(INTER_REGULAR, cur_title_size)
+    b_font = get_font(INTER_LIGHT, cur_body_size)
 
     t_lines, b_paragraphs, total_h, title_line_px, body_line_px, title_body_gap = rewrap_and_measure(
             draw, title_raw, body_raw, t_font, b_font, available_width, config
@@ -693,12 +746,46 @@ def make_image_from_bg(slide_text: str, bg_path: str, config: dict, sig: str = "
 
         draw.text((sig_x, sig_y), sig, font=sig_font, fill=sig_color)
     out = Image.alpha_composite(bg, txt_layer).convert("RGB")
-    return out  # <- важно, без этого вернётся None
+    try:
+        del draw
+        del txt_layer
+        bg.close()
+    except Exception:
+        pass
+    return out
 
 
 # -----------------------------
 import io
+
+
+# ---------- multiprocessing worker (top-level, чтобы можно было форкать) ----------
+def _worker_generate_slide_bytes(args):
+    """
+    args = (slide_text, bg_path, config, sig, slide_index)
+    Возвращает байты JPEG оптимизированного изображения или None при ошибке.
+    """
+    slide_text, bg_path, config, sig, slide_index = args
+    try:
+        img = make_image_from_bg(slide_text, bg_path, config, sig=sig, slide_index=slide_index)
+        bio = io.BytesIO()
+        # JPEG сжатие — значительно меньше памяти и веса, чем PNG
+        img.save(bio, format="JPEG", optimize=True, quality=85)
+        bio.seek(0)
+        data = bio.read()
+        bio.close()
+        img.close()
+        del img
+        gc.collect()
+        return data
+    except Exception as e:
+        logger.exception("Ошибка в worker при генерации слайда: %s", e)
+        return None
+
+
+# -----------------------------
 from aiogram.types import BufferedInputFile
+
 
 def generate_carousel(slides_or_prompt, template_index: int, sig: str = "", style=None) -> List[BufferedInputFile]:
     # slides_or_prompt может быть либо список из 6 строк, либо строкой prompt
@@ -719,14 +806,18 @@ def generate_carousel(slides_or_prompt, template_index: int, sig: str = "", styl
 
     # Получаем конфиг (без папки)
     config = TEMPLATE_SETUP_FUNCS[template_index]()
+    # масштабируем конфиг под лёгкий режим (если включён)
+    scaled_config = scale_config_for_lightweight(config)
 
     # Находим все папки и выбираем N-ю (1-based)
     folders = find_template_folders(POINT_TEMPLATES_DIR)
     if not folders:
         raise RuntimeError(f"Нет папок с png в {POINT_TEMPLATES_DIR}")
     if template_index < 1 or template_index > len(folders):
-        raise ValueError(f"template_index={template_index} больше числа найденных папок ({len(folders)}). "
-                         f"Передайте корректный номер папки (1..{len(folders)}).")
+        raise ValueError(
+            f"template_index={template_index} больше числа найденных папок ({len(folders)}). "
+            f"Передайте корректный номер папки (1..{len(folders)})."
+        )
 
     folder = folders[template_index - 1]  # выбираем N-ю папку
     logger.info(f"Используется шаблон {template_index} (настройки) и папка #{template_index}: {folder}")
@@ -740,22 +831,51 @@ def generate_carousel(slides_or_prompt, template_index: int, sig: str = "", styl
     else:
         pngs = pngs[:6]
 
-    files = []
+    # Подготовим аргументы для воркеров
+    args_list = []
     for i in range(6):
         slide_index = i + 1
         text = slides[i]
         bg = pngs[i]
-        img = make_image_from_bg(text, bg, config, sig=sig, slide_index=slide_index)
-        if img is None:
-            raise RuntimeError(f"Ошибка генерации слайда {slide_index}: изображение не создано")
+        args_list.append((text, bg, scaled_config, sig, slide_index))
 
-        # Сохраняем сразу в память
-        bio = io.BytesIO()
-        img.save(bio, format="PNG")
-        bio.seek(0)
+    data_results = [None] * 6
 
-        files.append(BufferedInputFile(bio.read(), filename=f"slide_{slide_index}.png"))
-        logger.info(f"Создан слайд {slide_index} (фон: {os.path.basename(bg)})")
+    # Попытка использовать ProcessPoolExecutor с mp_context=spawn (устойчивее в daemon окружениях)
+    if MAX_WORKERS > 1:
+        try:
+            workers = min(MAX_WORKERS, 6)
+            logger.info(f"Запускаем ProcessPoolExecutor из {workers} воркеров для генерации слайдов")
+            mp_ctx = multiprocessing.get_context("spawn")
+            with concurrent.futures.ProcessPoolExecutor(max_workers=workers, mp_context=mp_ctx) as executor:
+                # executor.map вернёт в том же порядке, в котором передали args_list
+                futures = list(executor.map(_worker_generate_slide_bytes, args_list))
+            data_results = futures
+            if any(r is None for r in data_results):
+                logger.warning("В пуле некоторые слайды не сгенерировались, пробуем последовательную генерацию (fallback).")
+                data_results = [None] * 6
+        except Exception as e:
+            logger.exception("ProcessPoolExecutor упал: %s. Будем генерировать последовательно.", e)
+            data_results = [None] * 6
 
+    # Если пул не сработал или отключён — последовательно вызвать воркер-функцию (локально)
+    if any(r is None for r in data_results):
+        for idx, args in enumerate(args_list):
+            logger.info("Последовательная генерация слайда %d", idx + 1)
+            data = _worker_generate_slide_bytes(args)
+            if data is None:
+                raise RuntimeError(f"Ошибка генерации слайда {idx + 1}")
+            data_results[idx] = data
+
+    # Сформируем BufferedInputFile-список
+    files = []
+    for i, data in enumerate(data_results):
+        if data is None:
+            raise RuntimeError(f"Слайд {i + 1} не сгенерирован")
+        filename = f"slide_{i+1}.jpg"
+        files.append(BufferedInputFile(data, filename=filename))
+        logger.info(f"Создан слайд {i+1}")
+
+    gc.collect()
     return files
 

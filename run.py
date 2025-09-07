@@ -1,6 +1,8 @@
 import logging
 import asyncio
+import threading
 from logging.handlers import RotatingFileHandler
+from multiprocessing import Process
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -69,17 +71,22 @@ dp.include_router(payment_router)
 # ===================
 app = FastAPI()
 
+def run_aiogram():
+    """Функция для отдельного процесса"""
+    asyncio.run(dp.start_polling(bot))
+
 
 @app.on_event("startup")
 async def on_startup():
-    """Запуск aiogram вместе с FastAPI"""
-    asyncio.create_task(dp.start_polling(bot))
+    """Запуск бота в отдельном процессе"""
+    process = Process(target=run_aiogram, daemon=True)
+    process.start()
 
 
 @app.post("/yookassa/webhook")
 async def yookassa_webhook(request: Request):
     data = await request.json()
-    logging.info(f"Webhook received: {data}")  # <-- добавлено
+    logging.info(f"Webhook received: {data}")
     event = data.get("event")
     obj = data.get("object", {})
 
@@ -87,9 +94,7 @@ async def yookassa_webhook(request: Request):
     plan_name = obj.get("metadata", {}).get("plan")
 
     if event == "payment.succeeded" and user_id:
-        # Определяем тип плана
         plan_type = 1 if "Базовый" in plan_name else 2
-        # Активируем подписку через SubscriptionManager
         subscription_manager.activate_subscription(user_id=user_id, plan_type=plan_type, days=30)
 
         await bot.send_message(
