@@ -19,11 +19,8 @@ class SubscriptionManager:
         sub = self.db.get_subscription(user_id)
         if sub["free_generations"] > 0:
             new_free = sub["free_generations"] - 1
-            status = sub["status"]
-            # если закончились бесплатные генерации и статус == 1 (активная бесплатная подписка), сбросить
-            if new_free == 0 and status == 1:
-                status = 0
-            self.db.update_subscription(user_id, status=status, free_generations=new_free)
+            # Не трогаем status — списание free_generations не должно менять статус подписки
+            self.db.update_subscription(user_id, free_generations=new_free)
             return True
         return False
 
@@ -42,15 +39,26 @@ class SubscriptionManager:
     def is_subscription_active(self, user_id):
         """Проверяет, активна ли подписка у пользователя"""
         sub = self.db.get_subscription(user_id)
+        # статус 0 = нет подписки
         if sub["status"] == 0:
             return False
-        if sub["subscription_end"]:
-            end = datetime.strptime(sub["subscription_end"], "%Y-%m-%d %H:%M:%S")
-            if today_date > end:
 
-                # подписка закончилась
-                self.db.update_subscription(user_id, status=0)
-                return False
+        # Если даты окончания нет — считаем подписку неактивной (чёткая политика)
+        if not sub.get("subscription_end"):
+            return False
+
+        try:
+            end = datetime.strptime(sub["subscription_end"], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            # если формат сломан, считаем подписку неактивной и обнуляем статус
+            self.db.update_subscription(user_id, status=0, subscription_end=None)
+            return False
+
+        if datetime.now() > end:
+            # подписка закончилась — сбрасываем статус
+            self.db.update_subscription(user_id, status=0, subscription_end=None)
+            return False
+
         return True
 
     def remaining_free_generations(self, user_id):
@@ -66,11 +74,9 @@ class SubscriptionManager:
             [InlineKeyboardButton(text="💳 Перейти к оплате", callback_data="go_to_payment")],
         ])
         if sub["status"] == 0 and sub["free_generations"] == 0:
-            await self.bot.send_message(chat_id=
-                user_id,
-                text="❌ У вас закончились бесплатные генерации и нет активной подписки. Оплатите тариф.",
-                                        reply_markup=payment_kb
-            )
+            await self.bot.send_message(chat_id=user_id,
+                                        text="❌ У вас закончились бесплатные генерации и нет активной подписки. Оплатите тариф.",
+                                        reply_markup=payment_kb)
             return False
         return True
 

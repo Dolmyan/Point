@@ -24,9 +24,7 @@ subscription_manager = SubscriptionManager(db=db, bot=bot)
 # -------------------- Выбор платформы --------------------
 @router.message(lambda message: message.text == "📌 Карусель")
 async def platform_carousel(message: Message, state: FSMContext):
-    if not await subscription_manager.can_generate(message.from_user.id):
-        return  # пользователь уведомлен, генерация не идёт
-
+    # УБРАЛИ can_generate() — навигация не должна списывать генерации
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='Instagram', callback_data='instagram'),
          InlineKeyboardButton(text='Telegram', callback_data='telegram')],
@@ -38,11 +36,10 @@ async def platform_carousel(message: Message, state: FSMContext):
     )
 
 
+
 @router.callback_query(lambda c: c.data in ["instagram", "telegram"])
 async def platform_chosen(callback_query: CallbackQuery, state: FSMContext):
-    if not await subscription_manager.can_generate(callback_query.from_user.id):
-        return
-
+    # УБРАЛИ can_generate()
     platform = callback_query.data
     await state.update_data(platform=platform)
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -95,7 +92,11 @@ async def carousel_generation(message: Message, state: FSMContext):
 
     if datetime.now() - last_reset >= timedelta(days=30):
         # Сбрасываем счётчик и обновляем дату сброса
-        db.update_subscription(user_id, carousel_count=0, carousel_count_last_reset=datetime.now().strftime("%Y-%m-%d"))
+        db.update_subscription(
+            user_id,
+            carousel_count=0,
+            carousel_count_last_reset=datetime.now().strftime("%Y-%m-%d")
+        )
         sub["carousel_count"] = 0
         sub["carousel_count_last_reset"] = datetime.now().strftime("%Y-%m-%d")
 
@@ -110,19 +111,13 @@ async def carousel_generation(message: Message, state: FSMContext):
         )
         return
 
-    # --- Проверка доступа: если нет подписки — списываем бесплатную генерацию ---
-    if sub["status"] == 0:
-        if sub["free_generations"] <= 0:
-            # уведомим и предложим оплатить
-            payment_kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="💳 Перейти к оплате", callback_data="go_to_payment")],
-            ])
-            await message.answer("❌ У вас закончились бесплатные генерации. Оплатите тариф.", reply_markup=payment_kb)
-            return
-        else:
-            # списываем одну бесплатную генерацию
-            db.update_subscription(user_id, free_generations=sub["free_generations"] - 1)
-            sub["free_generations"] -= 1
+    # ---------------- Проверка доступа (единственный момент списания бесплатной генерации) ----------------
+    # can_generate() вернёт True и, при необходимости, сам списывает free_generation.
+    if not await subscription_manager.can_generate(user_id):
+        return  # notify_if_no_access уже отправил сообщение пользователю
+
+    # Обновим данные подписки после возможного списания free_generation
+    sub = db.get_subscription(user_id)
 
     # --- Всё готово, запускаем генерацию ---
     theme = await text_or_voice(message)
@@ -144,8 +139,14 @@ async def carousel_generation(message: Message, state: FSMContext):
     request_task = loop.run_in_executor(None, generate_carousel, prompt, scheme_number, sig, style)
 
     # анимация ожидания
-    dots_animation = ["⏳ Пожалуйста, подождите.", "⏳ Пожалуйста, подождите..", "⏳ Пожалуйста, подождите...",
-                      "⌛ Пожалуйста, подождите...", "⌛ Пожалуйста, подождите..", "⌛ Пожалуйста, подождите."]
+    dots_animation = [
+        "⏳ Пожалуйста, подождите.",
+        "⏳ Пожалуйста, подождите..",
+        "⏳ Пожалуйста, подождите...",
+        "⌛ Пожалуйста, подождите...",
+        "⌛ Пожалуйста, подождите..",
+        "⌛ Пожалуйста, подождите."
+    ]
     delay = 0.5
     try:
         while not request_task.done():

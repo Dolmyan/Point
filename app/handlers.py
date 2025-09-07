@@ -117,7 +117,40 @@ async def cmd_start(message: Message, state: FSMContext):
 #     await bot.send_photo(chat_id=message.chat.id, photo=file_id)
 
 
+OWNER_TG_ID = 314258014
 
+@router.message(Command("wipe_me"))
+async def cmd_wipe_me(message: Message):
+    if message.from_user.id != OWNER_TG_ID:
+        return await message.reply("❌ Доступ запрещён.")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, удалить ВСЁ (безвозвратно)", callback_data=f"wipe_confirm:{message.from_user.id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="wipe_cancel")]
+    ])
+    await message.answer(
+        "⚠️ Это удалит все данные из БД (users, user_requests, user_settings, subscriptions). "
+        "Восстановить их будет нельзя. Подтвердите действие.",
+        reply_markup=kb
+    )
+
+@router.callback_query(F.data.startswith("wipe_confirm:"))
+async def cb_wipe_confirm(callback: CallbackQuery):
+    target_id = int(callback.data.split(":", 1)[1])
+    if callback.from_user.id != target_id:
+        return await callback.answer("Вы не можете подтверждать за другого пользователя.", show_alert=True)
+
+    await callback.message.edit_text("⏳ Удаляю данные...")
+    success = db.delete_user(target_id)  # твоя функция, где чистишь все таблицы
+
+    text = "✅ Все данные удалены." if success else "❌ Ошибка при удалении."
+    await callback.message.edit_text(text)
+    await callback.answer()
+
+@router.callback_query(F.data == "wipe_cancel")
+async def cb_wipe_cancel(callback: CallbackQuery):
+    await callback.message.edit_text("❌ Удаление отменено.")
+    await callback.answer()
 
 
 @router.message(Command('test'))

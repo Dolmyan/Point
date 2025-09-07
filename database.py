@@ -6,8 +6,16 @@ from datetime import datetime
 
 class BotDB:
     def __init__(self, database_file):
-        self.connection = sqlite3.connect(database_file)
+        # Allow usage from different threads (aiogram + fastapi background tasks)
+        self.connection = sqlite3.connect(database_file, check_same_thread=False)
         self.cursor = self.connection.cursor()
+
+        # Slightly better concurrency for SQLite
+        try:
+            self.cursor.execute("PRAGMA journal_mode=WAL;")
+        except Exception:
+            pass
+
         self.create_table()
 
     def create_table(self):
@@ -34,20 +42,19 @@ class BotDB:
                 user_id INTEGER UNIQUE ON CONFLICT REPLACE,
                 style TEXT,
                 business TEXT
-
             );
         ''')
 
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS subscriptions (
                 user_id INTEGER UNIQUE ON CONFLICT REPLACE,
-                status INTEGER NOT NULL DEFAULT 0,           -- 0: нет подписки, 1: базовый/бесплатный, 2: продвинутый
-                free_generations INTEGER NOT NULL DEFAULT 5, -- Кол-во бесплатных генераций
-                carousel_count INTEGER NOT NULL DEFAULT 0,   -- количество сгенерированных каруселей
-
-                subscription_end TEXT,                       -- Дата окончания подписки в формате ISO
+                status INTEGER NOT NULL DEFAULT 0,
+                free_generations INTEGER NOT NULL DEFAULT 5,
+                carousel_count INTEGER NOT NULL DEFAULT 0,
+                subscription_end TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                carousel_count_last_reset TEXT NOT NULL DEFAULT (date('now'))
             );
         ''')
 
@@ -84,7 +91,6 @@ class BotDB:
         ''', (user_id,))
 
         self.connection.commit()
-
     def update_business(self, user_id, business):
         self.cursor.execute(
                 "UPDATE user_settings SET business = ? WHERE user_id = ?",
@@ -144,7 +150,7 @@ class BotDB:
 
     def get_subscription(self, user_id):
         self.cursor.execute(
-                'SELECT status, free_generations, subscription_end, carousel_count FROM subscriptions WHERE user_id = ?',
+                'SELECT status, free_generations, subscription_end, carousel_count, carousel_count_last_reset FROM subscriptions WHERE user_id = ?',
                 (user_id,)
         )
         row = self.cursor.fetchone()
@@ -153,7 +159,8 @@ class BotDB:
                 "status": row[0],
                 "free_generations": row[1],
                 "subscription_end": row[2],
-                "carousel_count": row[3] or 0  # если None, ставим 0
+                "carousel_count": row[3] or 0,
+                "carousel_count_last_reset": row[4]  # ISO date string (YYYY-MM-DD)
             }
         # Если пользователя нет, создаём дефолтную запись
         self.cursor.execute(
@@ -161,7 +168,7 @@ class BotDB:
                 (user_id,)
         )
         self.connection.commit()
-        return {"status": 0, "free_generations": 5, "subscription_end": None, "carousel_count": 0}
+        return {"status": 0, "free_generations": 5, "subscription_end": None, "carousel_count": 0, "carousel_count_last_reset": datetime.now().strftime("%Y-%m-%d")}
 
     def update_subscription(self, user_id, status=None, free_generations=None, subscription_end=None,
                             carousel_count=None, carousel_count_last_reset=None):
@@ -227,6 +234,26 @@ class BotDB:
         if result:
             return result[0]  # user_id
         return None
+    def delete_user(self, user_id):
+        """
+        Удаляет все записи о пользователе из основных таблиц.
+        НЕЛЬЗЯ ОТМЕНИТЬ — используйте только для тестирования.
+        """
+        tables = [
+            "users",
+            "user_requests",
+            "user_settings",
+            "subscriptions"
+        ]
+        try:
+            for t in tables:
+                self.cursor.execute(f"DELETE FROM {t} WHERE user_id = ?", (user_id,))
+            self.connection.commit()
+            return True
+        except Exception as e:
+            logging.exception("Ошибка при удалении пользователя из БД")
+            self.connection.rollback()
+            return False
 
 
 
