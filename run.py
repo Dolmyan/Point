@@ -98,10 +98,16 @@ async def yookassa_webhook(request: Request):
         subscription_manager.activate_subscription(user_id=user_id, plan_type=plan_type, days=30)
 
         await bot.send_message(
-            user_id,
-            f"✅ Оплата прошла успешно!\nВы получили доступ к тарифу <b>{plan_name}</b> на 30 дней",
-            parse_mode="HTML"
+                user_id,
+                f"🎉 Подписка активирована!\n\n"
+                f"✅ Оплата прошла успешно!\n"
+                f"Вы получили доступ к тарифу <b>{plan_name}</b> на 30 дней 🙌\n\n"
+                f"Спасибо, что выбрал Point!\n\n"
+                f"Хочешь быть в курсе свежих функций, апдейтов и новостей?\n\n"
+                f"📢 Подписывайся на канал Point: https://t.me/point_content",
+                parse_mode="HTML"
         )
+
 
     elif event == "payment.canceled" and user_id:
         await bot.send_message(user_id, "❌ Оплата отменена.", parse_mode="HTML")

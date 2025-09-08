@@ -53,6 +53,7 @@ async def choose_platform(callback_query: CallbackQuery, state: FSMContext):
 async def choose_text_type(callback_query: CallbackQuery, state: FSMContext):
     await state.update_data(text_type=callback_query.data)
     data = await state.get_data()
+    print(data)
     content = f"""
     Ты — экспертный автор контента, который помогает создавать профессиональные посты для соцсетей. 
 
@@ -70,17 +71,17 @@ async def choose_text_type(callback_query: CallbackQuery, state: FSMContext):
     2. Подстраивай лексику, тон и ритм под этот стиль (слова, частоту коротких/длинных предложений, «вы/ты», уровень формальности).
     3. Выбирай формат генерации по полю «Формат публикации»:
 
-    — Если формат = "текстовый пост":  
+    — Если формат = "text_telegram":  
        Пиши связный пост с обязательным хук-вступлением → развитие → вывод/инсайт. Дай 1–3 конкретных совета/факта/преимущества. Заверши лёгким CTA.
 
-    — Если формат = "хуки":  
+    — Если формат = "text_hooks":  
        Сначала выведи тему отдельной строкой.  
        Затем через разделитель («- - - ... - - - - -») выдай **несколько блоков хуков** (по 3 примера в каждом).  
        Блоки могут быть такими: провокационные/спорные, ошибки, сторителлинг, вопросы, ценность/выгода, любопытство/тизер, боль/узнаваемая ситуация, статистика, экспериментальные.  
        Каждый хук — это короткая фраза/заголовок.  
        Формат вывода строго списками.
 
-    — Если формат = "threads":  
+    — Если формат = "text_threads":  
        Сначала выведи тему отдельной строкой.  
        Затем через разделитель («- - - ... - - - - -») оформи развернутую нить: несколько коротких абзацев (3–6), где каждый абзац — отдельная мысль или часть аргументации.  
        Используй стрелки «→» для выделения списков.  
@@ -97,5 +98,6 @@ async def choose_text_type(callback_query: CallbackQuery, state: FSMContext):
             generator(user_id=callback_query.from_user.id, content=content)
     )
     response = await response_generator(callback_query, request_task, bot=bot)
+    print(response)
     await state.set_state(Form.clear)
     await state.clear()
