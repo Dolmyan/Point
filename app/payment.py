@@ -43,7 +43,7 @@ async def show_tariffs(callback_query: CallbackQuery, state: FSMContext):
 🟩 Идеи для рассылок 
 🟩 Анализ трендов в твоей нише 
 🟩 Идеи для твоих видео
-💎 Цена: 1900₽
+💎 Цена: 1600₽
 """
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -61,7 +61,7 @@ async def process_payment(callback_query: CallbackQuery):
         amount = 790
         plan_name = "Базовый тариф"
     else:
-        amount = 1900
+        amount = 1600
         plan_name = "Продвинутый тариф"
 
     # Создание платежа с metadata (user_id, план)
@@ -80,15 +80,14 @@ async def process_payment(callback_query: CallbackQuery):
             "user_id": callback_query.from_user.id,
             "plan": plan_name
         },
-        "test": True  # тестовый режим
+        "test": False  # тестовый режим
     })
 
     # Отправляем пользователю ссылку на оплату
     await callback_query.message.answer(
         f"Вы выбрали <b>{plan_name}</b>.\n"
         f"Сумма к оплате: <b>{amount}₽</b>\n"
-        f"👉 <a href='{payment.confirmation.confirmation_url}'>Оплатить</a>\n\n"
-        "⚠️ Это тестовый платеж, деньги списываться не будут.",
+        f"👉 <a href='{payment.confirmation.confirmation_url}'>Оплатить</a>\n\n",
         parse_mode="HTML",
         disable_web_page_preview=True
     )
