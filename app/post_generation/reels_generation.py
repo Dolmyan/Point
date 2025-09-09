@@ -97,5 +97,6 @@ async def process_reels_callbacks(callback_query: CallbackQuery, state: FSMConte
             generator(user_id=callback_query.from_user.id, content=content)
     )
     response = await response_generator(callback_query, request_task, bot=bot)
+    await state.set_state(Form.clear)
     await state.clear()
 

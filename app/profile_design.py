@@ -42,10 +42,8 @@ async def profile_design(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="🌟 Идеи для Highlights IG", callback_data="ig_highlights")]
     ])
     await bot.send_photo(
-            caption="""
-            💡 Что будем создавать?\n
-            Выбери одну из кнопок ниже, чтобы приступить к работе ⬇  
-            """,
+            caption="💡 Что будем создавать?\n"
+                    "Выбери одну из кнопок ниже, чтобы приступить к работе ⬇ ",
             parse_mode="HTML",
             photo='AgACAgIAAxkBAAOoaLCncUpTj5yVmb99qKnWCzCzWdwAAloBMhulPIlJa-XdYhMiqGgBAAMCAAN3AAM2BA',
             chat_id=message.chat.id,
@@ -91,3 +89,4 @@ async def inline_choice(callback_query: CallbackQuery, state: FSMContext):
             generator(user_id=callback_query.from_user.id, content=content)
     )
     response = await response_generator(callback_query, request_task, bot=bot)
+    await state.set_state(Form.clear)

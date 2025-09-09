@@ -77,7 +77,7 @@ async def reg_style(message: Message, state: FSMContext):
             parse_mode="HTML",
             reply_markup=menu
     )
-
+    await state.set_state(Form.clear)
     await state.clear()
 
 

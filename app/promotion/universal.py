@@ -174,9 +174,11 @@ async def universal(callback_query: CallbackQuery, state: FSMContext):
             "🖋️ <b>Генерация текста</b>\n\n"
             "💡 Давай определимся с темой! "
             "Чем точнее опишешь, тем интереснее и полезнее будет результат.\n\n"
-            "👇 Напиши, на какую тему будем писать:",
+            "👇 Напиши, на какую тему будем писать "
+            "или запиши голосовое 🎙️:",
             parse_mode="HTML"
     )
+
     await state.set_state(Form.theme_universal)
 
 @router.message(Form.theme_universal)
@@ -200,3 +202,4 @@ async def universal_handler(message: Message, state: FSMContext):
             generator(user_id=message.from_user.id, content=content)
     )
     response = await response_generator(message, request_task, bot=bot)
+    await state.set_state(Form.clear)

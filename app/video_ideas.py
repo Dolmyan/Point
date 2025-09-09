@@ -74,3 +74,4 @@ async def video_ideas_handler(message: Message, state: FSMContext):
             generator(user_id=message.from_user.id, content=content)
     )
     response = await response_generator(message, request_task, bot=bot)
+    await state.set_state(Form.clear)
